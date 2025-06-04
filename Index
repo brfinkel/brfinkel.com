@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Benjamin Finkel Planetarium Portfolio</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Tailwind CSS CDN for basic styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif; /* Using Inter font */
+            background-color: #000000; /* Deep space black */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* The overlay div is now empty, but kept for potential future use if needed */
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none; /* Allows clicks to pass through to canvas */
+            color: #e0e0e0;
+            text-shadow: 0 0 15px rgba(173, 216, 230, 0.8); /* Light blue glow for stars */
+            z-index: 10; /* Ensure overlay is above the 3D scene but below message box */
+        }
+        #instructions {
+            position: absolute;
+            bottom: 1rem;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #a0a0a0;
+            font-size: 0.9rem;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            pointer-events: none;
+            opacity: 0.8;
+            z-index: 10;
+        }
+        /* Custom modal for messages */
+        .message-box {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(173, 216, 230, 0.8); /* Light blue glow */
+            z-index: 1000;
+            text-align: center;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+        .message-box.show {
+            opacity: 1;
+            visibility: visible;
+        }
+        .message-box button {
+            background-color: #add8e6; /* Light blue button */
+            color: #1a1a2e; /* Dark text on button */
+            border: none;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+            font-weight: bold;
+            transition: background-color 0.2s ease;
+        }
+        .message-box button:hover {
+            background-color: #87ceeb; /* Slightly darker blue on hover */
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Canvas for Three.js rendering -->
+    <div id="webgl-container" class="w-full h-full"></div>
+
+    <!-- Overlay for text and UI elements (now empty, only 3D text will be used) -->
+    <div id="overlay">
+        <!-- 3D text will be rendered directly in the Three.js scene -->
+    </div>
+
+    <!-- Instructions for interaction -->
+    <div id="instructions">
+        Drag to look around, scroll to zoom in/out on the text.
+    </div>
+
+    <!-- Message Box Element -->
+    <div id="messageBox" class="message-box">
+        <p id="messageText"></p>
+        <button onclick="hideMessageBox()">OK</button>
+    </div>
+
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- OrbitControls for camera interaction -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- FontLoader for 3D text -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/FontLoader.js"></script>
+    <!-- TextGeometry for 3D text -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/geometries/TextGeometry.js"></script>
+
+    <script>
+        // Global variables for Three.js scene
+        let scene, camera, renderer, starfield, controls, skySphere, earthSphere;
+        let textMesh;
+        let cubeCamera, cubeRenderTarget; // For text reflections
+
+        // Function to show custom message box
+        function showMessageBox(message) {
+            const messageBox = document.getElementById('messageBox');
+            const messageText = document.getElementById('messageText');
+            messageText.textContent = message;
+            messageBox.classList.add('show');
+        }
+
+        // Function to hide custom message box
+        function hideMessageBox() {
+            const messageBox = document.getElementById('messageBox');
+            messageBox.classList.remove('show');
+        }
+
+        // Define a small, curated set of Northern Hemisphere stars with approximate J2000 coordinates
+        // RA is in hours, Dec is in degrees
+        // Magnitudes are approximate visual magnitudes (lower is brighter)
+        const northernStarsData = [
+            { name: "Polaris", ra: 2.52, dec: 89.26, magnitude: 1.98, color: 0xFFFFFF }, // North Star
+            { name: "Dubhe", ra: 11.03, dec: 61.75, magnitude: 1.79, color: 0xFFDDAA }, // Ursa Major
+            { name: "Merak", ra: 11.02, dec: 56.38, magnitude: 2.37, color: 0xFFFFFF }, // Ursa Major
+            { name: "Alioth", ra: 12.92, dec: 55.96, magnitude: 1.77, color: 0xFFFFFF }, // Ursa Major
+            { name: "Mizar", ra: 13.39, dec: 54.93, magnitude: 2.23, color: 0xFFFFFF }, // Ursa Major
+            { name: "Alkaid", ra: 13.95, dec: 49.31, magnitude: 1.86, color: 0xFFFFFF }, // Ursa Major
+            { name: "Kochab", ra: 14.37, dec: 74.15, magnitude: 2.07, color: 0xFFFFFF }, // Ursa Minor
+            { name: "Pherkad", ra: 15.42, dec: 71.97, magnitude: 3.00, color: 0xFFFFFF }, // Ursa Minor
+            { name: "Vega", ra: 18.62, dec: 38.78, magnitude: 0.03, color: 0xADD8E6 }, // Lyra (very bright, bluish)
+            { name: "Deneb", ra: 20.69, dec: 45.30, magnitude: 1.25, color: 0xFFFFFF }, // Cygnus (bright)
+            { name: "Altair", ra: 19.85, dec: 8.87, magnitude: 0.77, color: 0xFFFFFF }, // Aquila (bright)
+            { name: "Arcturus", ra: 14.15, dec: 19.18, magnitude: -0.05, color: 0xFFC0CB }, // Boötes (bright, reddish-orange)
+            { name: "Capella", ra: 5.16, dec: 45.99, magnitude: 0.08, color: 0xFFFFFF }, // Auriga (bright)
+            { name: "Aldebaran", ra: 4.59, dec: 16.51, magnitude: 0.87, color: 0xFFA07A }, // Taurus (reddish)
+            { name: "Betelgeuse", ra: 5.92, dec: 7.41, magnitude: 0.42, color: 0xFF6347 }, // Orion (red giant)
+            { name: "Rigel", ra: 5.14, dec: -8.20, magnitude: 0.13, color: 0xADD8E6 }, // Orion (blue giant, technically Southern but visible from North)
+            { name: "Sirius", ra: 6.75, dec: -16.71, magnitude: -1.46, color: 0xADD8E6 }, // Canis Major (brightest star, visible from North)
+            { name: "Procyon", ra: 7.66, dec: 5.22, magnitude: 0.34, color: 0xFFFFFF }, // Canis Minor (bright)
+        ];
+
+        // Function to convert Right Ascension (RA) and Declination (Dec) to Cartesian coordinates
+        // RA is in hours (0-24), Dec is in degrees (-90 to +90)
+        // Radius determines the distance of the stars from the center
+        function raDecToCartesian(raHours, decDegrees, radius) {
+            const raRad = raHours * (Math.PI / 12); // Convert RA hours to radians (24 hours = 2PI)
+            const decRad = decDegrees * (Math.PI / 180); // Convert Dec degrees to radians
+
+            // Spherical to Cartesian conversion
+            // In astronomy, Dec is latitude, RA is longitude.
+            // Three.js uses Y-up, so we map Dec to Y, and RA to XZ plane.
+            // Adjusting for Three.js coordinate system (Y-up)
+            const x = radius * Math.cos(decRad) * Math.cos(raRad);
+            const y = radius * Math.sin(decRad); // Y is up/down (Dec)
+            const z = radius * Math.cos(decRad) * Math.sin(raRad);
+
+            return new THREE.Vector3(x, y, z);
+        }
+
+        // Function to create a gradient texture for the sky
+        function createSkyGradientTexture(width, height, horizonColor, zenithColor) {
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const context = canvas.getContext('2d');
+
+            const gradient = context.createLinearGradient(0, 0, 0, height);
+            gradient.addColorStop(0, zenithColor); // Top of the sky (darkest)
+            gradient.addColorStop(1, horizonColor); // Bottom of the sky (lightest)
+
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, width, height);
+
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // Initialize the Three.js scene
+        function init() {
+            // Get the container for the WebGL renderer
+            const container = document.getElementById('webgl-container');
+
+            // Scene setup
+            scene = new THREE.Scene();
+            // scene.background will be set by the skySphere
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.set(0, 0, 0.1); // Position camera slightly off center to prevent clipping with sphere
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            container.appendChild(renderer.domElement);
+
+            // OrbitControls for camera interaction
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true; // Smooth camera movement
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 0.1; // Allow zooming very close to the text
+            controls.maxDistance = 10; // Allow zooming out from the text
+            controls.target.set(0, 0, 0); // Camera will orbit around the center of the scene
+
+            // Lighting
+            // Adjusted for almost night, with a subtle glow
+            const ambientLight = new THREE.AmbientLight(0x202020 * 1.5); // Increased overall ambient
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0x80a0ff, 0.6); // Pale blue/moonlight, slightly increased intensity
+            directionalLight.position.set(0, 0.2, -1).normalize(); // Low angle, subtle backlighting
+            scene.add(directionalLight);
+
+            const hemisphereLight = new THREE.HemisphereLight(0x101030, 0x050505, 0.8); // Dark blue sky to very dark ground, slightly increased intensity
+            scene.add(hemisphereLight);
+
+            // --- Almost Night Sky Sphere with Gradient ---
+            const skySphereGeometry = new THREE.SphereGeometry(1500, 32, 32);
+            const horizonColor = '#051030'; // Very dark blue for horizon
+            const zenithColor = '#000005'; // Almost black for zenith
+
+            const skyTexture = createSkyGradientTexture(256, 256, horizonColor, zenithColor);
+            const skyMaterial = new THREE.MeshBasicMaterial({
+                map: skyTexture,
+                side: THREE.BackSide // Render on the inside
+            });
+            skySphere = new THREE.Mesh(skySphereGeometry, skyMaterial);
+            scene.add(skySphere);
+            scene.background = skyTexture; // Set the renderer background to the sky texture
+
+            // --- Earth Sphere Beneath Us ---
+            const earthRadius = 700; // Size of the Earth
+            const earthGeometry = new THREE.SphereGeometry(earthRadius, 64, 64);
+            const textureLoader = new THREE.TextureLoader();
+
+            const earthMaterial = new THREE.MeshStandardMaterial({
+                map: textureLoader.load('https://placehold.co/2048x1024/000000/FFFFFF?text=Earth+Diffuse'), // Placeholder diffuse map
+                normalMap: textureLoader.load('https://placehold.co/2048x1024/000000/FFFFFF?text=Earth+Normal'), // Placeholder normal map
+                roughnessMap: textureLoader.load('https://placehold.co/2048x1024/000000/FFFFFF?text=Earth+Roughness'), // Placeholder roughness map
+                metalness: 0,
+                roughness: 0.9 // Make Earth less reflective, more matte
+            });
+            earthSphere = new THREE.Mesh(earthGeometry, earthMaterial);
+            earthSphere.position.y = -earthRadius - 100; // Position Earth well below the camera
+            scene.add(earthSphere);
+
+
+            // --- Create the starfield from curated data and add procedural stars ---
+            const starsGeometry = new THREE.BufferGeometry();
+            const positions = [];
+            const colors = [];
+            const sizes = []; // For varying star sizes based on magnitude
+
+            const starfieldRadius = 1000; // Radius of the starfield sphere
+
+            // Add curated Northern Hemisphere stars
+            northernStarsData.forEach(star => {
+                const pos = raDecToCartesian(star.ra, star.dec, starfieldRadius);
+                positions.push(pos.x, pos.y, pos.z);
+
+                // Map magnitude to size (lower magnitude = brighter = larger point)
+                const mappedSize = Math.max(0.2, 3 - star.magnitude * 0.5); // Adjusted base size and multiplier for curated stars
+                sizes.push(mappedSize);
+
+                const color = new THREE.Color(star.color);
+                colors.push(color.r, color.g, color.b);
+            });
+
+            // Add a layer of procedural background stars to fill the space
+            const numProceduralStars = 100000; // Significantly more stars for density
+            for (let i = 0; i < numProceduralStars; i++) {
+                const x = (Math.random() - 0.5) * 2 * starfieldRadius;
+                const y = (Math.random() - 0.5) * 2 * starfieldRadius;
+                const z = (Math.random() - 0.5) * 2 * starfieldRadius;
+
+                const distance = Math.sqrt(x*x + y*y + z*z);
+                if (distance > starfieldRadius) {
+                    const factor = starfieldRadius / distance;
+                    positions.push(x * factor, y * factor, z * factor);
+                } else {
+                    positions.push(x, y, z);
+                }
+
+                // Random size for procedural stars
+                sizes.push(Math.random() * 0.3 + 0.05); // Smaller random sizes for background
+                // Random color for procedural stars (subtle variations)
+                const randomColor = new THREE.Color(0.8 + Math.random() * 0.2, 0.8 + Math.random() * 0.2, 0.8 + Math.random() * 0.2);
+                colors.push(randomColor.r, randomColor.g, randomColor.b);
+            }
+
+
+            starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            starsGeometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1)); // Custom attribute for size
+            starsGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3)); // Custom attribute for color
+
+            // Custom shader material to use per-vertex size and color for twinkling
+            const starMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    color: { value: new THREE.Color(0xffffff) },
+                    time: { value: 0.0 } // Add time uniform for twinkling
+                },
+                vertexShader: `
+                    attribute float size;
+                    attribute vec3 color;
+                    varying vec3 vColor;
+                    varying float vOpacityFactor; // For twinkling
+                    uniform float time; // Receive time uniform
+
+                    void main() {
+                        vColor = color;
+                        vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+                        gl_PointSize = size * ( 2000.0 / -mvPosition.z ); // Drastically increased multiplier for visibility
+                        
+                        // Calculate a unique twinkling factor for each star based on its position and time
+                        // Using dot product with a random vector to create unique phase
+                        float twinkleSpeed = 5.0; // Adjust speed of twinkling
+                        float twinkleOffset = dot(position.xyz, vec3(1.23, 4.56, 7.89)) * 0.1; // Unique offset per star
+                        vOpacityFactor = (sin(time * twinkleSpeed + twinkleOffset) * 0.5 + 0.5); // 0 to 1 range
+                        vOpacityFactor = clamp(vOpacityFactor, 0.8, 1.0); // Ensure it doesn't go too dim, subtle twinkling
+
+                        gl_Position = projectionMatrix * mvPosition;
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 color;
+                    varying vec3 vColor;
+                    varying float vOpacityFactor; // Receive twinkling factor
+
+                    void main() {
+                        // Normalized point coordinates from -0.5 to 0.5
+                        vec2 uv = gl_PointCoord - 0.5;
+                        float dist = length(uv);
+
+                        // Central glow (circular) - adjusted for a sharper core
+                        float glow = 1.0 - smoothstep(0.0, 0.3, dist); // Sharper falloff for central glow
+
+                        // Diffraction spikes (cross shape)
+                        float spikeWidth = 0.01; // Even thinner spikes for sharpness
+                        float spikeFalloff = 1.0; // Less aggressive falloff for longer, brighter spikes
+
+                        // Create four spikes: horizontal, vertical, and two diagonals
+                        float spike1 = max(0.0, 1.0 - abs(uv.y / spikeWidth)); // Horizontal
+                        float spike2 = max(0.0, 1.0 - abs(uv.x / spikeWidth)); // Vertical
+                        
+                        // Diagonal spikes - rotate UVs by 45 degrees
+                        vec2 uvRot45 = vec2(uv.x * 0.7071 - uv.y * 0.7071, uv.x * 0.7071 + uv.y * 0.7071); // 0.7071 is 1/sqrt(2)
+                        float spike3 = max(0.0, 1.0 - abs(uvRot45.y / spikeWidth)); // Diagonal 1
+                        float spike4 = max(0.0, 1.0 - abs(uvRot45.x / spikeWidth)); // Diagonal 2
+
+
+                        float spikes = max(max(spike1, spike2), max(spike3, spike4));
+                        spikes = pow(spikes, spikeFalloff); // Soften the spikes
+
+                        // Combine central glow and spikes
+                        // Use a mix to ensure brighter stars have more pronounced spikes
+                        // Increased mix factor to strongly prioritize spikes
+                        float finalAlpha = mix(glow, spikes, 0.98); 
+                        finalAlpha = max(finalAlpha, glow); // Ensure central glow is always present
+
+                        gl_FragColor = vec4( vColor, finalAlpha * vOpacityFactor ); // Apply color and twinkling
+                    }
+                `,
+                blending: THREE.AdditiveBlending, // For glowing effect
+                depthTest: false, // Stars always visible
+                transparent: true
+            });
+
+            starfield = new THREE.Points(starsGeometry, starMaterial);
+            // Initial rotation to align Polaris (Dec 89.26) with the "up" direction (Y-axis)
+            // A small rotation around X to bring the celestial pole closer to Y-axis.
+            starfield.rotation.x = Math.PI / 2 - THREE.MathUtils.degToRad(90); // Align celestial equator with XZ plane
+            starfield.rotation.y = -Math.PI / 2; // Rotate around Y to bring RA=0 to a visible position
+
+            scene.add(starfield);
+            // --- End of starfield creation ---
+
+            // Environment map for reflections on text
+            cubeRenderTarget = new THREE.WebGLCubeRenderTarget( 256, {
+                format: THREE.RGBAFormat,
+                generateMipmaps: true,
+                minFilter: THREE.LinearMipmapLinearFilter
+            } );
+            cubeCamera = new THREE.CubeCamera( 1, 1000, cubeRenderTarget );
+            scene.add( cubeCamera );
+
+
+            // Load font for 3D text
+            const fontLoader = new THREE.FontLoader();
+            // Using 'gentilis_regular.typeface.json' for a serif, modern feel
+            fontLoader.load('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/fonts/gentilis_regular.typeface.json', function (font) {
+                const textGeometry = new THREE.TextGeometry('Benjamin Finkel is a filmmaker from Philadelphia.', {
+                    font: font,
+                    size: 0.4, // Increased size for better visibility
+                    height: 0.05,
+                    curveSegments: 12,
+                    bevelEnabled: true,
+                    bevelThickness: 0.02,
+                    bevelSize: 0.01,
+                    bevelOffset: 0,
+                    bevelSegments: 5
+                });
+                textGeometry.computeBoundingBox();
+                textGeometry.center(); // Center the text geometry
+
+                // Dark shimmering mirror look for text
+                const textMaterial = new THREE.MeshStandardMaterial({
+                    color: 0x808080, // Lighter grey for better visibility
+                    metalness: 0.95, // High metalness for mirror-like reflection
+                    roughness: 0.2, // Some roughness for a shimmering, not perfectly smooth mirror
+                    envMap: cubeRenderTarget.texture, // Apply the dynamically generated environment map
+                    envMapIntensity: 3.5, // Increased intensity of reflections
+                    emissive: 0x101010, // Subtle dark emissive color for a faint glow
+                    emissiveIntensity: 0.8 // Increased emissive intensity
+                });
+                textMesh = new THREE.Mesh(textGeometry, textMaterial);
+                textMesh.position.set(0, 0, -2); // Position text slightly in front of the camera's initial view
+                scene.add(textMesh);
+            });
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // Handle window resizing
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Update controls for smooth camera movement
+            controls.update();
+
+            // Update time uniform for twinkling stars
+            if (starfield && starfield.material.uniforms.time) {
+                starfield.material.uniforms.time.value += 0.01; // Adjust speed as needed
+            }
+
+            // Rotate the starfield slowly to give a sense of movement (Earth's rotation)
+            if (starfield) {
+                starfield.rotation.z += 0.00005;
+            }
+
+            // Rotate the Earth slowly
+            if (earthSphere) {
+                earthSphere.rotation.y += 0.0001;
+            }
+
+            // Update the cube camera for reflections on the text
+            if (cubeCamera && renderer && scene) {
+                // Hide the text temporarily so it doesn't reflect itself
+                if (textMesh) textMesh.visible = false;
+                cubeCamera.update( renderer, scene );
+                if (textMesh) textMesh.visible = true;
+            }
+
+
+            // Render the scene
+            renderer.render(scene, camera);
+        }
+
+        // Initialize and start animation when the window loads
+        window.onload = function () {
+            init();
+            animate();
+        };
+    </script>
+
+</body>
+</html>
